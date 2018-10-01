@@ -136,7 +136,7 @@ for k = 1:Na
             % shift and upscale the components           
             su(:,:,Np*(k-1)+l) = modshift(S(:,:,l).*notch, -f, 1);
             sw(:,:,Np*(k-1)+l) = modshift(H.*notch, -f, 0);
-            % correct flip of image
+            % correct flip of image dur to global phase error
             su(:,:,Np*(k-1)+l) = register_int(sw(:,:,Np*(k-1)+1),sw(:,:,Np*(k-1)+l),su(:,:,Np*(k-1)+1),su(:,:,Np*(k-1)+l));            
             % print information on the components
             period = N / norm(f);
@@ -245,6 +245,18 @@ end
 dx = dx - (size(r,2))/2 - 1;
 dy = dy - (size(r,1))/2 - 1;
 f = [dy;dx];
+end
+
+function phaseccc()
+    % the phase and amplitude
+    Z = kx .* XY(:,:,1) + ky .* XY(:,:,2);
+    Q = data(:,:,k) ./ max(1,avg);
+    v = [cos(Z(:)) -sin(Z(:))] \ Q(:);
+    phases(k) = atan2(v(2), v(1));
+    Q = data(:,:,k);
+    a = sum(Q(:) .* cos(Z(:))) ;
+    b = sum(Q(:) .* sin(Z(:)));
+    amplitudes(k) = 0.25;
 end
 
 function dest = phasesplit(data)

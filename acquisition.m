@@ -1,71 +1,70 @@
 %% Reconstruct acquired SIM data
+% 
+% Jerome Boulanger 2018
 
 clear all
-warning off
+
 % select a file
 [f, d] = uigetfile('../Data/*.tif');
-%%
 filename = [d, f];
 fprintf('Loading ''%s''\n', filename);
-for l = 1:numel(imfinfo(filename))
+metadata = imfinfo(filename);
+% load the data in a 3D array
+data = zeros(metadata(1).Height,metadata(1).Width,numel(metadata));
+for l = 1:numel(metadata)
   data(:,:,l) = double(imread(filename, l));
 end
-data = data - median(data(:));
-%%
-if (strfind(filename,'CFK') > 0)
-    pixel_size = 83.3;
-    wavelength = 610;
-    numerical_aperture = 1.2;
-elseif (strfind(filename,'Curie') > 0)
-    pixel_size = 65;
-    wavelength = 500;
-    numerical_aperture = 1.49;
-elseif (strfind(filename,'SLM-SIM') > 0)
-    pixel_size = 90;
-    wavelength = 690;
-    numerical_aperture = 1.2;  
-elseif (strfind(filename,'Zeiss') > 0)
-    pixel_size = 65;
-    wavelength = 520;
-    numerical_aperture = 1.30;    
-else
-    pixel_size = 82.9;
-    wavelength = 580;
-    numerical_aperture = 1.49;
+
+% padding in case images are not square
+if size(data,1) < size(data,2)    
+    P = (size(data,2)-size(data,1));
+    data = padarray(data,[P,0,0],min(data(:)),'post');
 end
 
-cutoff = wavelength / (2 * pixel_size * numerical_aperture);
-fprintf('px:%.2fnm lambda:%.0fnm NA:%.2f > %.2fpx\n', pixel_size, wavelength, numerical_aperture, cutoff);
-otf = gen_otf(size(data,1), cutoff);
-zoom = 2;
-wiener_factor = 0.05;
-padding_level = 0;
-prefilter = false;
-notchfilter = 1;
-subpixel_localization = true;
-verbose_mode = 0;
+if size(data,1) > size(data,2)    
+    P = (size(data,1)-size(data,2));
+    data = padarray(data,[P,0],min(data(:)),'post');
+end
 
-% reconstruct
+% load or define microscopy parameters
+pfile = [d strrep(f,'.tif','.mat')];
+if exist(pfile,'file')
+    load(pfile);
+else    
+    answer = inputdlg({'Pixel_size','Wavelength','NA'},...
+        'Microscope parameter', 1, {'82.9','580','1.49'}); 
+    pixel_size = str2double(answer{1});
+    wavelength = str2double(answer{2});
+    numerical_aperture = str2double(answer{3});
+    fprintf('Saving parameters to file ''%s''.\n', pfile);
+    save(pfile,'pixel_size','wavelength','numerical_aperture');
+end
+cutoff = wavelength / (2 * pixel_size * numerical_aperture);
+fprintf('px:%.2fnm lambda:%.0fnm NA:%.2f (%.2fpx)\n', ...
+    pixel_size, wavelength, numerical_aperture, cutoff);
+otf = generate_otf(max(size(data)), cutoff);
+
+%% estimate modulations
 tic
-[img,dec,avg] = simrec(data,otf,zoom,wiener_factor,padding_level,prefilter,notchfilter,subpixel_localization,verbose_mode);
+phat = estimate_sim_parameters(data,otf);
+display_sim_parameter(phat,pixel_size,wavelength,numerical_aperture)
+toc
+%%  reconstruct the image
+tic
+zoom = 2;
+wiener_parameter = 1;
+mask_amplitude = 0.75;
+[im,sw] = reconstruct_sim_base(data,phat,otf,zoom, ...
+    wiener_parameter,mask_amplitude);
 toc
 
-% display
 figure(1);
-otf = fftupscale(otf);
-subplot(231), imshow(sqrt(avg),[]);title('WF');
-subplot(234), fftshow(avg,otf);title('|FFT|');
-subplot(232), imshow(sqrt(dec),[]);title('Deconvolution');
-subplot(235), fftshow(dec,otf);title('|FFT|');
-subplot(233), imshow(sqrt(img),[]);title('SIM');
-subplot(236), fftshow(img,otf);title('|FFT|');
-figure(3), clf, imshow(max(0,dec),[])
-figure(2);clf, imshow(max(0,img),[])
+subplot(221), imshow(mean(data,3),[]);
+subplot(222), fftshow(mean(data,3),otf);
+subplot(223), imshow(im,[0 max(im(:))])
+subplot(224), fftshow(im,otf);
 
-% save 
-img = img / max(img(:)) * (2^16-1);
-dec = dec / max(dec(:)) * (2^16-1);
-avg = avg / max(avg(:)) * (2^16-1);
-imwrite(uint16(img),strrep(filename,'.tif','_sim.tif'));
-imwrite(uint16(dec),strrep(filename,'.tif','_dec.tif'));
-imwrite(uint16(avg),strrep(filename,'.tif','_avg.tif'));
+%% save the file
+ofilename = strrep(filename,'.tif','_sim.tif');
+fprintf('Saving file ''%s''\n', ofilename);
+imwrite(uint16(max(0,im)),ofilename);

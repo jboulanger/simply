@@ -1,58 +1,36 @@
-% simulation of structured illumination microscopy
-clear all
-warning off
-
-zoom = 2;
-
-obj = double(imread('Obj.tif'));
-Na = 3;
-Np = 3;
-cutoff = zoom*2.35;
-otf = gen_otf(size(obj,1), cutoff);
-period = zoom* 3.16 * ones(Na,Np);
-theta = kron((0:Na-1)/Na*180, ones(Np,1));
-shift = kron(ones(1,Na), (0:Np-1)'/Np);
-L = numel(period);
+% Simulation of structured illumination microscopy imaging and
+% reconstruction.
 %
-noise_std = 5;
+% Jerome Boulanger 2018
 
-
-m = double(0.5+0.5*genpat(size(obj,2),size(obj,1),period,theta,shift,1));
-data = real(ifft2(fft2(m.*repmat(obj,[1 1 L])) .* repmat(otf,[1 1 L])));
-if zoom == 2
-    % downsample data;
-    data = fftshift(fftshift(fft2(data),1),2);
-    data = data(size(data,1)/4+1:3*size(data,1)/4,size(data,2)/4+1:3*size(data,2)/4,:);
-    data = real(ifft2(ifftshift(ifftshift(data,2),1)));
-    % downsample the otf    
-    otf = fftshift(otf);
-    otf = otf(size(otf,1)/4+1:3*size(otf,1)/4,size(otf,2)/4+1:3*size(otf,2)/4,:);
-    otf = ifftshift(otf);
-end
-
-data = data + noise_std * randn(size(data));
-subplot(121), imshow(mean(data,3),[])
-
-wiener_factor = .001;
-padding_level = 0;
-prefilter = false;
-notchfilter = 1;
-subpixel_localization = true;
-verbose_mode = 2;
-
-tic
-[img,dec,avg] = simrec(data,otf,zoom,wiener_factor,padding_level,prefilter,notchfilter,subpixel_localization,verbose_mode);
-toc
-
-figure(1);
-otf = fftupscale(otf);
-subplot(231), imshow(sqrt(obj),[]);title('WF');
-subplot(234), fftshow(obj,otf);title('|FFT|');
-subplot(232), imshow(sqrt(dec),[]);title('Deconvolution');
-subplot(235), fftshow(dec,otf);title('|FFT|');
-subplot(233), imshow(sqrt(img),[]);title('SIM');
-subplot(236), fftshow(img,otf);title('|FFT|');
-
-fprintf(1,'dec rms:%f\n', sqrt(mean((dec(:)-obj(:)).^2)));
-fprintf(1,'sim rms:%f\n', sqrt(mean((img(:)-obj(:)).^2)));
-figure(2),clf,imshow(max(0,img),[])
+clear all
+filename = 'periodic_pattern.tif';
+period = 12; % modulation period (before zoom)
+cutoff = 4; % cutoff frequency
+zoom = 2; % zoom factor (1 or 2)
+noise_std = 2; % Gaussin noise level
+wiener_parameter = 0.03; % wiener parameter
+mask_amplitude = 0.75; % mask amplitude
+obj = double(imread(filename)); % load the test image
+p = generate_sim_parameters(period,3,3); % generate SIM parameters
+m = generate_sim_modulation(size(obj), p); % generate a set of modulation
+otf = generate_otf(size(obj,1), cutoff); % compute an OTF
+[data,otf] = generate_sim_data(obj,m,otf,zoom,noise_std); % generate SIM data
+tic;
+phat = estimate_sim_parameters(data,otf); % estimate SIM parameters 
+display_sim_parameter(phat); % display a summary of the parameters
+mhat = generate_sim_modulation(size(obj), phat); % and compute the modulation
+[im,sw] = reconstruct_sim_base(data,phat,otf,zoom,wiener_parameter,mask_amplitude);
+toc;
+% display results
+figure(1), clf; 
+subplot(121), imshow(im,[]);
+subplot(122), fftshow(im);
+% compute the root mean square error 
+c = polyfit(obj(:),im(:),1);
+im = (im - c(2)) / c(1);
+avg = imresize(mean(data,3), size(obj));
+c = polyfit(obj(:),avg(:),1);
+avg = (avg - c(2)) / c(1);
+fprintf(1,'Error AVG RMS:%f\n', sqrt(mean((avg(:)-obj(:)).^2))/mean(obj(:)));
+fprintf(1,'Error SIM RMS:%f\n', sqrt(mean((im(:)-obj(:)).^2))/mean(obj(:)));
